@@ -1,19 +1,10 @@
-import 'dart:io';
-
-import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:sweph/sweph.dart';
 
 import '../models/body_position.dart';
 import '../models/celestial_body_definition.dart';
 
-// Swiss Ephemeris flag constants (bitfield).
-const int _kSeflgSwieph = 2;   // use .se1 files
-const int _kSeflgSpeed = 256;  // compute speed (for retrograde detection)
-const int _kSeflgMoseph = 4;   // Moshier fallback (planets only, no files needed)
-
-const int _baseFlags = _kSeflgSwieph | _kSeflgSpeed;
-const int _moshierFlags = _kSeflgMoseph | _kSeflgSpeed;
+final SwephFlag _baseFlags = SwephFlag.SEFLG_SWIEPH | SwephFlag.SEFLG_SPEED;
+final SwephFlag _moshierFlags = SwephFlag.SEFLG_MOSEPH | SwephFlag.SEFLG_SPEED;
 
 class EphemerisService {
   EphemerisService._();
@@ -21,13 +12,12 @@ class EphemerisService {
 
   bool _initialized = false;
 
-  /// Call once at startup.  Extracts bundled .se1 assets to the documents
-  /// directory and points libswe at that directory.
+  /// Call once at startup.  Initialises the native sweph library.
   Future<void> initialize() async {
     if (_initialized) return;
-
-    final epheDir = await _extractEphemerisAssets();
-    Sweph.swe_set_ephe_path(epheDir);
+    // Sweph.init() loads the native library and optionally copies bundled .se1
+    // assets from the assets/ephe/ folder.  Pass asset paths if you bundle them.
+    await Sweph.init();
     _initialized = true;
   }
 
@@ -55,14 +45,12 @@ class EphemerisService {
     final jd = toJulianDayUT(utcTime);
     final results = <BodyPosition>[];
 
-    // We need the North Node position whenever the South Node is requested.
     bool needNorthNode = false;
     BodyPosition? northNodePos;
     final sortedIds = bodyIds.toList();
     if (sortedIds.contains('south_node')) {
       needNorthNode = true;
       if (!sortedIds.contains('true_node')) {
-        // Ensure we compute the north node even if not explicitly requested.
         sortedIds.add('__north_node_internal');
       }
     }
@@ -129,12 +117,8 @@ class EphemerisService {
     }
   }
 
-  BodyPosition _fromCoord(String bodyId, CoordinateWithSpeed coord) {
-    // CoordinateWithSpeed field names may vary by sweph package version:
-    //   coord.speedLon  — used here (sweph ≥ 2.8)
-    //   coord.speedLong — alternative name in some versions
-    // If you get a compile error on coord.speedLon, rename it to coord.speedLong.
-    final speed = coord.speedLon;
+  BodyPosition _fromCoord(String bodyId, CoordinatesWithSpeed coord) {
+    final speed = coord.speedInLongitude;
     return BodyPosition(
       bodyId: bodyId,
       longitude: coord.longitude % 360.0,
@@ -145,32 +129,4 @@ class EphemerisService {
     );
   }
 
-  // ── Asset extraction ─────────────────────────────────────────────────
-
-  Future<String> _extractEphemerisAssets() async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final epheDir = Directory('${docsDir.path}/ephe');
-    if (!epheDir.existsSync()) {
-      epheDir.createSync(recursive: true);
-    }
-
-    // Discover which .se1 files are bundled as assets.
-    final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
-    final assetPaths = manifest
-        .listAssets()
-        .where((p) => p.startsWith('assets/ephe/') && p.endsWith('.se1'))
-        .toList();
-
-    for (final assetPath in assetPaths) {
-      final fileName = assetPath.split('/').last;
-      final dest = File('${epheDir.path}/$fileName');
-      // Only copy if the file doesn't exist yet (avoids re-copying on every launch).
-      if (!dest.existsSync()) {
-        final data = await rootBundle.load(assetPath);
-        await dest.writeAsBytes(data.buffer.asUint8List(), flush: true);
-      }
-    }
-
-    return epheDir.path;
-  }
 }
