@@ -9,7 +9,11 @@ void main() async {
 
   // Extract bundled .se1 ephemeris assets and point libswe at them.
   // This is a no-op on subsequent launches for files already extracted.
-  await EphemerisService.instance.initialize();
+  try {
+    await EphemerisService.instance.initialize();
+  } catch (e) {
+    debugPrint('[Ephemeris] Initialisation failed: $e');
+  }
 
   runApp(
     const ProviderScope(child: AstroPortableApp()),

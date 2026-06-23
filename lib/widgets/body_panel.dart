@@ -4,75 +4,52 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/celestial_body_definition.dart';
 import '../providers/chart_provider.dart';
 
-class BodySelectionSheet extends ConsumerWidget {
-  const BodySelectionSheet({super.key});
+class InlineBodySelector extends ConsumerWidget {
+  const InlineBodySelector({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final enabled = ref.watch(chartProvider).enabledBodyIds;
     final notifier = ref.read(chartProvider.notifier);
 
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.55,
-      minChildSize: 0.30,
-      maxChildSize: 0.85,
-      builder: (_, controller) => Container(
-        decoration: const BoxDecoration(
-          color: Color(0xFF0D1B2A),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                margin: const EdgeInsets.symmetric(vertical: 10),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF334466),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
+    return Container(
+      color: const Color(0xFF0D1B2A),
+      padding: const EdgeInsets.fromLTRB(12, 16, 12, 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(left: 4, bottom: 4),
+            child: Text(
+              'Celestial Bodies',
+              style: TextStyle(
+                  color: Color(0xFFCCDDEE),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600),
             ),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Text('Celestial Bodies',
-                  style: TextStyle(
-                      color: Color(0xFFCCDDEE),
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600)),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: ListView(
-                controller: controller,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: [
-                  _Section(title: 'Classic Planets & Nodes',
-                      category: BodyCategory.classic,
-                      extra: [BodyCategory.node],
-                      enabled: enabled,
-                      onToggle: notifier.toggleBody),
-                  _Section(title: 'Main Asteroids',
-                      category: BodyCategory.mainAsteroid,
-                      enabled: enabled,
-                      onToggle: notifier.toggleBody),
-                  _Section(title: 'Centaurs',
-                      category: BodyCategory.centaur,
-                      enabled: enabled,
-                      onToggle: notifier.toggleBody),
-                  _Section(title: 'Trans-Neptunian Objects',
-                      category: BodyCategory.tno,
-                      enabled: enabled,
-                      onToggle: notifier.toggleBody),
-                  const SizedBox(height: 24),
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+          _Section(
+              title: 'Classic Planets & Nodes',
+              category: BodyCategory.classic,
+              extra: const [BodyCategory.node],
+              enabled: enabled,
+              onToggle: notifier.toggleBody),
+          _Section(
+              title: 'Main Asteroids',
+              category: BodyCategory.mainAsteroid,
+              enabled: enabled,
+              onToggle: notifier.toggleBody),
+          _Section(
+              title: 'Centaurs',
+              category: BodyCategory.centaur,
+              enabled: enabled,
+              onToggle: notifier.toggleBody),
+          _Section(
+              title: 'Trans-Neptunian Objects',
+              category: BodyCategory.tno,
+              enabled: enabled,
+              onToggle: notifier.toggleBody),
+        ],
       ),
     );
   }
@@ -95,8 +72,9 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bodies = kAllBodies.where(
-        (b) => b.category == category || extra.contains(b.category)).toList();
+    final bodies = kAllBodies
+        .where((b) => b.category == category || extra.contains(b.category))
+        .toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -142,9 +120,7 @@ class _BodyChip extends StatelessWidget {
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: isOn
-              ? def.color.withOpacity(0.22)
-              : const Color(0xFF0A1520),
+          color: isOn ? def.color.withOpacity(0.22) : const Color(0xFF0A1520),
           border: Border.all(
             color: isOn ? def.color.withOpacity(0.8) : const Color(0xFF223344),
             width: 1,

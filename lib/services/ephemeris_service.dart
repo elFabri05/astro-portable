@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:sweph/sweph.dart';
 
 import '../models/body_position.dart';
@@ -15,9 +16,19 @@ class EphemerisService {
   /// Call once at startup.  Initialises the native sweph library.
   Future<void> initialize() async {
     if (_initialized) return;
-    // Sweph.init() loads the native library and optionally copies bundled .se1
-    // assets from the assets/ephe/ folder.  Pass asset paths if you bundle them.
-    await Sweph.init();
+    // Extract the three bundled sweph data files to the app's support directory
+    // and point libswe at them via swe_set_ephe_path.
+    //
+    // seas_18.se1  → bodies 15–20: Chiron, Pholus, Ceres, Pallas, Juno, Vesta
+    // sepl_18.se1  → bodies  0–14: Sun … Pluto, True Node, Lilith, etc.
+    // semo_18.se1  → Moon
+    //
+    // Numbered bodies (sweId ≥ 10000) need individual seNNNNNN.se1 files which
+    // are NOT bundled here; they will fail gracefully at compute time.
+    // Do NOT add asset paths that don't exist: rootBundle.load() throws for
+    // missing paths and that would prevent swe_set_ephe_path from ever being
+    // called, breaking every non-Moshier computation.
+    await Sweph.init(epheAssets: List<String>.from(Sweph.bundledEpheAssets));
     _initialized = true;
   }
 
@@ -94,26 +105,34 @@ class EphemerisService {
     if (def == null) return null;
     if (def.sweId == kSouthNodeSyntheticId) return null; // handled separately
 
-    // HeavenlyBody(int) constructs an arbitrary body ID.
-    // In sweph packages that use a sealed enum without a public constructor,
-    // replace HeavenlyBody(id) with the named constant (e.g. HeavenlyBody.SE_SUN)
-    // for ids 0–20, and check if the package exposes swe_calc_ut(double, int, int).
     try {
       final coord = Sweph.swe_calc_ut(jd, HeavenlyBody(def.sweId), _baseFlags);
       return _fromCoord(bodyId, coord);
-    } catch (_) {
-      // File missing or body out of ephemeris range — fall back to Moshier
-      // (only works for bodies with sweId < 10000).
-      if (def.sweId < 10000) {
+    } catch (e) {
+      debugPrint('[Ephemeris] SWIEPH failed for $bodyId (sweId=${def.sweId}): $e');
+
+      if (def.sweId >= 10000) {
+        // Numbered body: needs an individual seNNNNNN.se1 file that is not
+        // bundled. Moshier cannot compute it either.
+        final mpc = def.sweId - 10000;
+        debugPrint('[Ephemeris]   → missing ast${mpc ~/ 1000}/se${mpc.toString().padLeft(6, '0')}.se1');
+        return null;
+      }
+
+      // Moshier covers only the classic planets (sweId 0–9) and requires no
+      // data files.  Bodies 10–22 (nodes, Chiron, main asteroids, etc.) are
+      // NOT in Moshier; trying them would just produce a second silent failure.
+      if (def.sweId <= 9) {
         try {
           final coord =
               Sweph.swe_calc_ut(jd, HeavenlyBody(def.sweId), _moshierFlags);
+          debugPrint('[Ephemeris] Moshier fallback succeeded for $bodyId');
           return _fromCoord(bodyId, coord);
-        } catch (_) {
-          return null;
+        } catch (e2) {
+          debugPrint('[Ephemeris] Moshier also failed for $bodyId: $e2');
         }
       }
-      return null; // asteroid without its .se1 file — skip silently
+      return null;
     }
   }
 

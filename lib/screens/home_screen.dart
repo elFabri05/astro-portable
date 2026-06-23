@@ -19,58 +19,98 @@ class HomeScreen extends ConsumerWidget {
     final notifier = ref.read(chartProvider.notifier);
     final localTime = state.utcTime.toLocal();
 
+    // Reserve enough of the viewport for the chart to be useful, while leaving
+    // a visible peek of the body selector so the user knows to scroll down.
+    final stickyHeight = MediaQuery.of(context).size.height * 0.67;
+
     return Scaffold(
       backgroundColor: const Color(0xFF060F18),
       body: SafeArea(
-        child: Column(
-          children: [
-            // ── Header ───────────────────────────────────────────────────
-            _Header(
-              localTime: localTime,
-              isComputing: state.isComputing,
-              onJump: () => showDialog(
-                context: context,
-                builder: (_) => const DateJumpDialog(),
-              ),
-              onNow: notifier.resetToNow,
-            ),
-
-            // ── Chart wheel ───────────────────────────────────────────────
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: CustomPaint(
-                  painter: WheelPainter(state),
-                  child: const SizedBox.expand(),
+        child: CustomScrollView(
+          slivers: [
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _ChartSliverDelegate(
+                height: stickyHeight,
+                localTime: localTime,
+                isComputing: state.isComputing,
+                onJump: () => showDialog(
+                  context: context,
+                  builder: (_) => const DateJumpDialog(),
                 ),
+                onNow: notifier.resetToNow,
+                chartState: state,
               ),
             ),
-
-            // ── Time steppers ─────────────────────────────────────────────
-            Container(
-              color: const Color(0xFF0A1520),
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: const TimeStepperBar(),
+            const SliverToBoxAdapter(
+              child: InlineBodySelector(),
             ),
           ],
         ),
       ),
+    );
+  }
+}
 
-      // ── FAB → body selection sheet ────────────────────────────────────
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: const Color(0xFF1A3050),
-        foregroundColor: const Color(0xFF88AACC),
-        tooltip: 'Celestial bodies',
-        onPressed: () => showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (_) => const BodySelectionSheet(),
-        ),
-        child: const Icon(Icons.star_outline),
+// Fixed-height pinned sliver that holds the header bar, chart wheel, and
+// time steppers. minExtent == maxExtent prevents any collapsing on scroll.
+class _ChartSliverDelegate extends SliverPersistentHeaderDelegate {
+  final double height;
+  final DateTime localTime;
+  final bool isComputing;
+  final VoidCallback onJump;
+  final VoidCallback onNow;
+  final ChartState chartState;
+
+  _ChartSliverDelegate({
+    required this.height,
+    required this.localTime,
+    required this.isComputing,
+    required this.onJump,
+    required this.onNow,
+    required this.chartState,
+  });
+
+  @override
+  double get maxExtent => height;
+
+  @override
+  double get minExtent => height;
+
+  @override
+  Widget build(
+      BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return Container(
+      color: const Color(0xFF060F18),
+      child: Column(
+        children: [
+          _Header(
+            localTime: localTime,
+            isComputing: isComputing,
+            onJump: onJump,
+            onNow: onNow,
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: CustomPaint(
+                painter: WheelPainter(chartState),
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+          Container(
+            color: const Color(0xFF0A1520),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: const TimeStepperBar(),
+          ),
+        ],
       ),
     );
   }
+
+  @override
+  bool shouldRebuild(_ChartSliverDelegate old) => true;
 }
 
 class _Header extends StatelessWidget {
@@ -93,7 +133,6 @@ class _Header extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         children: [
-          // Date/time display
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -113,18 +152,15 @@ class _Header extends StatelessWidget {
               ],
             ),
           ),
-
           if (isComputing)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 8),
               child: SizedBox(
                   width: 14,
                   height: 14,
-                  child: CircularProgressIndicator(strokeWidth: 1.5,
-                      color: Color(0xFF556677))),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 1.5, color: Color(0xFF556677))),
             ),
-
-          // Jump to date
           TextButton.icon(
             onPressed: onJump,
             icon: const Icon(Icons.calendar_today_outlined,
@@ -134,12 +170,10 @@ class _Header extends StatelessWidget {
             style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 8)),
           ),
-
-          // Back to now
           TextButton.icon(
             onPressed: onNow,
-            icon: const Icon(Icons.my_location, size: 14,
-                color: Color(0xFF55AA88)),
+            icon: const Icon(Icons.my_location,
+                size: 14, color: Color(0xFF55AA88)),
             label: const Text('Now',
                 style: TextStyle(color: Color(0xFF55AA88), fontSize: 12)),
             style: TextButton.styleFrom(
