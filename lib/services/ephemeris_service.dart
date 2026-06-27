@@ -1,4 +1,9 @@
+import 'dart:io' show Directory, File, Platform;
+
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:sweph/sweph.dart';
 
 import '../models/body_position.dart';
@@ -6,6 +11,29 @@ import '../models/celestial_body_definition.dart';
 
 final SwephFlag _baseFlags = SwephFlag.SEFLG_SWIEPH | SwephFlag.SEFLG_SPEED;
 final SwephFlag _moshierFlags = SwephFlag.SEFLG_MOSEPH | SwephFlag.SEFLG_SPEED;
+
+// Individual asteroid / TNO .se1 files bundled in our assets/ephe/ directory.
+// Both 5-digit and 6-digit forms are included for compatibility with different
+// libsweph versions (SE naming changed from se#####.se1 to se######.se1).
+const List<String> _kOurEpheAssets = [
+  'assets/ephe/s136108.se1',   // Haumea
+  'assets/ephe/s136199.se1',   // Eris
+  'assets/ephe/s136472.se1',   // Makemake
+  'assets/ephe/se007066.se1',  // Nessus   (6-digit)
+  'assets/ephe/se010199.se1',  // Chariklo (6-digit)
+  'assets/ephe/se020000.se1',  // Varuna   (6-digit)
+  'assets/ephe/se028978.se1',  // Ixion    (6-digit)
+  'assets/ephe/se050000.se1',  // Quaoar   (6-digit)
+  'assets/ephe/se090377.se1',  // Sedna    (6-digit)
+  'assets/ephe/se090482.se1',  // Orcus    (6-digit)
+  'assets/ephe/se07066.se1',   // Nessus   (5-digit fallback)
+  'assets/ephe/se10199.se1',   // Chariklo (5-digit fallback)
+  'assets/ephe/se20000.se1',   // Varuna   (5-digit fallback)
+  'assets/ephe/se28978.se1',   // Ixion    (5-digit fallback)
+  'assets/ephe/se50000.se1',   // Quaoar   (5-digit fallback)
+  'assets/ephe/se90377.se1',   // Sedna    (5-digit fallback)
+  'assets/ephe/se90482.se1',   // Orcus    (5-digit fallback)
+];
 
 class EphemerisService {
   EphemerisService._();
@@ -16,26 +44,83 @@ class EphemerisService {
   /// Call once at startup.  Initialises the native sweph library.
   Future<void> initialize() async {
     if (_initialized) return;
-    // Extract the three bundled sweph data files to the app's support directory
-    // and point libswe at them via swe_set_ephe_path.
-    //
-    // seas_18.se1  → bodies 15–20: Chiron, Pholus, Ceres, Pallas, Juno, Vesta
-    // sepl_18.se1  → bodies  0–14: Sun … Pluto, True Node, Lilith, etc.
-    // semo_18.se1  → Moon
-    //
-    // Numbered bodies (sweId ≥ 10000) need individual seNNNNNN.se1 files which
-    // are NOT bundled here; they will fail gracefully at compute time.
-    // Do NOT add asset paths that don't exist: rootBundle.load() throws for
-    // missing paths and that would prevent swe_set_ephe_path from ever being
-    // called, breaking every non-Moshier computation.
-    await Sweph.init(epheAssets: List<String>.from(Sweph.bundledEpheAssets));
+
+    // The sweph package's saveEpheAssets() calls saveEpheFile() without
+    // awaiting it, creating a race: swe_set_ephe_path() runs before the
+    // files finish writing on the first install.  We extract all assets
+    // ourselves (properly awaited) then call Sweph.init(epheAssets: [])
+    // which only loads the native library and sets swe_set_ephe_path —
+    // the empty list skips the broken extraction loop entirely.
+    if (!kIsWeb) {
+      try {
+        await _extractAllEpheAssets();
+      } catch (e) {
+        debugPrint('[Ephemeris] Asset extraction failed: $e');
+      }
+    }
+
+    try {
+      await Sweph.init(epheAssets: []);
+    } catch (e) {
+      debugPrint('[Ephemeris] Sweph.init failed: $e');
+    }
+
     _initialized = true;
+  }
+
+  Future<void> _extractAllEpheAssets() async {
+    final appSupportDir = (await getApplicationSupportDirectory()).path;
+    final epheFilesPath = p.join(appSupportDir, 'ephe_files');
+    Directory(epheFilesPath).createSync(recursive: true);
+
+    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+      // Desktop: read directly from the on-disk flutter_assets directory —
+      // faster and avoids rootBundle buffering quirks on some builds.
+      final exeDir = p.dirname(Platform.resolvedExecutable);
+      final flutterAssets = p.join(exeDir, 'data', 'flutter_assets');
+      _copyEpheDir(
+        p.join(flutterAssets, 'packages', 'sweph', 'assets', 'ephe'),
+        epheFilesPath,
+      );
+      _copyEpheDir(
+        p.join(flutterAssets, 'assets', 'ephe'),
+        epheFilesPath,
+      );
+    } else {
+      // Android / iOS: extract via rootBundle (properly awaited).
+      final allAssets = [...Sweph.bundledEpheAssets, ..._kOurEpheAssets];
+      for (final assetPath in allAssets) {
+        final destName = p.basename(assetPath);
+        final destFile = File(p.join(epheFilesPath, destName));
+        if (destFile.existsSync()) continue;
+        try {
+          final bytes = (await rootBundle.load(assetPath)).buffer.asUint8List();
+          await destFile.writeAsBytes(bytes);
+          debugPrint('[Ephemeris] Extracted $destName');
+        } catch (e) {
+          debugPrint('[Ephemeris] Failed to extract $destName: $e');
+        }
+      }
+    }
+  }
+
+  static void _copyEpheDir(String src, String dest) {
+    final dir = Directory(src);
+    if (!dir.existsSync()) return;
+    for (final entity in dir.listSync()) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      if (!name.endsWith('.se1') && !name.endsWith('.txt')) continue;
+      final destFile = File(p.join(dest, name));
+      if (!destFile.existsSync()) {
+        destFile.writeAsBytesSync(entity.readAsBytesSync());
+        debugPrint('[Ephemeris] Extracted $name');
+      }
+    }
   }
 
   // ── Julian Day ──────────────────────────────────────────────────────
 
-  /// Convert a UTC [DateTime] to Julian Day Number (UT), which is what
-  /// swe_calc_ut expects.
   double toJulianDayUT(DateTime utc) {
     final hour = utc.hour + utc.minute / 60.0 + utc.second / 3600.0;
     return Sweph.swe_julday(
@@ -49,9 +134,6 @@ class EphemerisService {
 
   // ── Body computation ─────────────────────────────────────────────────
 
-  /// Compute positions of all [bodyIds] for the given UTC [dateTime].
-  /// Bodies that cannot be computed (e.g., missing ephemeris file) are
-  /// silently omitted.
   List<BodyPosition> computeAll(DateTime utcTime, Iterable<String> bodyIds) {
     final jd = toJulianDayUT(utcTime);
     final results = <BodyPosition>[];
@@ -68,12 +150,11 @@ class EphemerisService {
 
     for (final id in sortedIds) {
       if (id == '__north_node_internal') {
-        // Internal request to get north node for south node derivation.
         final pos = _computeBody('true_node', jd);
         if (pos != null) northNodePos = pos;
         continue;
       }
-      if (id == 'south_node') continue; // handled after the loop
+      if (id == 'south_node') continue;
 
       final pos = _computeBody(id, jd);
       if (pos != null) {
@@ -103,7 +184,7 @@ class EphemerisService {
   BodyPosition? _computeBody(String bodyId, double jd) {
     final def = kBodyById[bodyId];
     if (def == null) return null;
-    if (def.sweId == kSouthNodeSyntheticId) return null; // handled separately
+    if (def.sweId == kSouthNodeSyntheticId) return null;
 
     try {
       final coord = Sweph.swe_calc_ut(jd, HeavenlyBody(def.sweId), _baseFlags);
@@ -111,22 +192,12 @@ class EphemerisService {
     } catch (e) {
       debugPrint('[Ephemeris] SWIEPH failed for $bodyId (sweId=${def.sweId}): $e');
 
-      if (def.sweId >= 10000) {
-        // Numbered body: needs an individual seNNNNNN.se1 file that is not
-        // bundled. Moshier cannot compute it either.
-        final mpc = def.sweId - 10000;
-        debugPrint('[Ephemeris]   → missing ast${mpc ~/ 1000}/se${mpc.toString().padLeft(6, '0')}.se1');
-        return null;
-      }
+      if (def.sweId >= 10000) return null;
 
-      // Moshier covers only the classic planets (sweId 0–9) and requires no
-      // data files.  Bodies 10–22 (nodes, Chiron, main asteroids, etc.) are
-      // NOT in Moshier; trying them would just produce a second silent failure.
       if (def.sweId <= 9) {
         try {
           final coord =
               Sweph.swe_calc_ut(jd, HeavenlyBody(def.sweId), _moshierFlags);
-          debugPrint('[Ephemeris] Moshier fallback succeeded for $bodyId');
           return _fromCoord(bodyId, coord);
         } catch (e2) {
           debugPrint('[Ephemeris] Moshier also failed for $bodyId: $e2');
@@ -147,5 +218,4 @@ class EphemerisService {
       isRetrograde: speed < 0,
     );
   }
-
 }
